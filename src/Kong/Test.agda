@@ -1,4 +1,4 @@
-module Test where
+module Kong.Test where
 
 open import Data.Nat using (ℕ ; zero ; suc)
 open import Kong using (kong)

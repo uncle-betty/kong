@@ -1,12 +1,12 @@
-module Kong where
+module Kong.Tactic where
 
 open import Data.Nat using (ℕ ; zero ; suc)
 open import Data.List using (List ; [] ; _∷_ ; map)
 open import Data.Unit using (⊤ ; tt)
 open import Function using (_$_ ; _∘_ ; case_of_)
 open import Reflection as R using (_>>_ ; _>>=_ ; return)
-open import Reflection.Name using () renaming (_≟_ to _≟ⁿ_)
-open import Reflection.Term using () renaming (_≟_ to _≟ᵗ_)
+open import Reflection.AST.Name using () renaming (_≟_ to _≟ⁿ_)
+open import Reflection.AST.Term using () renaming (_≟_ to _≟ᵗ_)
 open import Relation.Binary.PropositionalEquality using (_≡_ ; cong)
 open import Relation.Nullary using (yes ; no)
 
@@ -35,10 +35,12 @@ private
       (yes _) → return $ R.var 0 []
       (no  _) →
         case sub of λ where
-          (R.con n as) → processArgs as >>= return ∘ R.con n
-          (R.def n as) → processArgs as >>= return ∘ R.def n
-          (R.lit l)    → return $ R.lit l
-          _            → R.typeError $ R.strErr "bad subterm in goal: " ∷ R.termErr sub ∷ []
+          (R.var x as)  → processArgs as >>= return ∘ R.var (suc x)
+          (R.con c as)  → processArgs as >>= return ∘ R.con c
+          (R.def f as)  → processArgs as >>= return ∘ R.def f
+          (R.lit l)     → return $ R.lit l
+          (R.meta x as) → processArgs as >>= return ∘ R.meta x
+          _             → R.typeError $ R.strErr "bad subterm in goal: " ∷ R.termErr sub ∷ []
     where
     recurse : List (R.Arg R.Term) → List (R.Arg (R.TC R.Term))
     recurse = map λ { (R.arg i t) → R.arg i (markTargets n t lhs) }
@@ -56,13 +58,15 @@ private
 macro
   kong : R.Term → R.Term → R.TC ⊤
   kong proof hole = do
-    rule    ← R.inferType proof
-    goal    ← R.inferType hole
-    ruleLhs ← leftHandSide rule
-    goalLhs ← leftHandSide goal
-    marked  ← markTargets 1000 goalLhs ruleLhs
-    lambda  ← return $ R.lam R.visible (R.abs "#" marked)
-    result  ← return $ R.def (quote cong) $ makeArg lambda ∷ makeArg proof ∷ []
+    rule     ← R.inferType proof
+    goal     ← R.inferType hole
+    ruleLhs  ← leftHandSide rule
+    goalLhs  ← leftHandSide goal
+    ruleLhs′ ← R.normalise ruleLhs
+    goalLhs′ ← R.normalise goalLhs
+    marked   ← markTargets 1000 goalLhs′ ruleLhs′
+    lambda   ← return $ R.lam R.visible (R.abs "#" marked)
+    result   ← return $ R.def (quote cong) $ makeArg lambda ∷ makeArg proof ∷ []
     R.unify hole result
     where
     makeArg : R.Term → R.Arg R.Term
