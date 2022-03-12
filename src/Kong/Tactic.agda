@@ -3,14 +3,19 @@ module Kong.Tactic where
 open import Data.Nat using (ℕ ; zero ; suc)
 open import Data.List using (List ; [] ; _∷_ ; map)
 open import Data.Unit using (⊤ ; tt)
-open import Function using (_$_ ; _∘_ ; case_of_)
-open import Reflection as R using (_>>_ ; _>>=_ ; return)
+open import Function using (_∘_ ; case_of_)
 open import Reflection.AST.Name using () renaming (_≟_ to _≟ⁿ_)
 open import Reflection.AST.Term using () renaming (_≟_ to _≟ᵗ_)
+open import Reflection.TCM.Syntax using (pure ; _>>=_ ; _<$>_ ; _<*>_)
 open import Relation.Binary.PropositionalEquality using (_≡_ ; cong)
 open import Relation.Nullary using (yes ; no)
 
+import Reflection as R
+
 private
+  pattern visArg m x     = R.arg (R.arg-info R.visible m) x
+  pattern irrInstArg q x = R.arg (R.arg-info R.instance′ (R.modality R.irrelevant q)) x
+
   leftHandSide : R.Term → R.TC R.Term
   leftHandSide rule =
     case rule of λ where
@@ -21,53 +26,68 @@ private
       _ → invalid
     where
     invalid : R.TC R.Term
-    invalid = R.typeError $ R.strErr "bad rule: " ∷ R.termErr rule ∷ []
+    invalid = R.typeError (R.strErr "bad rule: " ∷ R.termErr rule ∷ [])
 
     firstVisible : List (R.Arg R.Term) → R.TC R.Term
-    firstVisible []                                      = invalid
-    firstVisible (R.arg (R.arg-info R.visible _) t ∷ _ ) = return t
-    firstVisible (_                                ∷ as) = firstVisible as
+    firstVisible []                = invalid
+    firstVisible (visArg _ x ∷ _ ) = pure x
+    firstVisible (_          ∷ as) = firstVisible as
 
-  markTargets : ℕ → R.Term → R.Term → R.TC R.Term
-  markTargets zero    _   _   = R.typeError $ R.strErr "out of fuel" ∷ []
-  markTargets (suc n) sub lhs =
-    case sub ≟ᵗ lhs of λ where
-      (yes _) → return $ R.var 0 []
+  stripIrrelevant : R.Term → R.TC R.Term
+  stripIrrelevant sub =
+    case sub of λ where
+      (R.var x as)  → R.var x  <$> stripArgs as
+      (R.con c as)  → R.con c  <$> stripArgs as
+      (R.def f as)  → R.def f  <$> stripArgs as
+      (R.meta x as) → R.meta x <$> stripArgs as
+      (R.lit l)     → pure (R.lit l)
+      _             → invalid
+    where
+    invalid : R.TC R.Term
+    invalid = R.typeError (R.strErr "bad subterm in goal: " ∷ R.termErr sub ∷ [])
+
+    stripArgs : List (R.Arg R.Term) → R.TC (List (R.Arg R.Term))
+    stripArgs []                    = pure []
+    stripArgs (irrInstArg q x ∷ as) = stripArgs as
+    stripArgs (R.arg i x ∷ as)      =
+      (λ x′ as′ → R.arg i x′ ∷ as′) <$> stripIrrelevant x <*> stripArgs as
+
+  markTargets : R.Term → R.Term → R.TC R.Term
+  markTargets sub lhs = do
+    sub′ ← stripIrrelevant sub
+    case sub′ ≟ᵗ lhs of λ where
+      (yes _) → pure (R.var 0 [])
       (no  _) →
         case sub of λ where
-          (R.var x as)  → processArgs as >>= return ∘ R.var (suc x)
-          (R.con c as)  → processArgs as >>= return ∘ R.con c
-          (R.def f as)  → processArgs as >>= return ∘ R.def f
-          (R.lit l)     → return $ R.lit l
-          (R.meta x as) → processArgs as >>= return ∘ R.meta x
-          _             → R.typeError $ R.strErr "bad subterm in goal: " ∷ R.termErr sub ∷ []
+          (R.var x as)  → R.var (suc x) <$> markArgs as
+          (R.con c as)  → R.con c       <$> markArgs as
+          (R.def f as)  → R.def f       <$> markArgs as
+          (R.meta x as) → R.meta x      <$> markArgs as
+          (R.lit l)     → pure (R.lit l)
+          _             → invalid
     where
-    recurse : List (R.Arg R.Term) → List (R.Arg (R.TC R.Term))
-    recurse = map λ { (R.arg i t) → R.arg i (markTargets n t lhs) }
+    invalid : R.TC R.Term
+    invalid = R.typeError (R.strErr "bad subterm in goal: " ∷ R.termErr sub ∷ [])
 
-    insideOut : List (R.Arg (R.TC R.Term)) → R.TC (List (R.Arg R.Term))
-    insideOut []               = return []
-    insideOut (R.arg i t ∷ as) = do
-      t′  ← t
-      as′ ← insideOut as
-      return $ R.arg i t′ ∷ as′
-
-    processArgs : List (R.Arg R.Term) → R.TC (List (R.Arg R.Term))
-    processArgs = insideOut ∘ recurse
+    markArgs : List (R.Arg R.Term) → R.TC (List (R.Arg R.Term))
+    markArgs []               = pure []
+    markArgs (R.arg i x ∷ as) =
+      (λ x′ as′ → (R.arg i x′) ∷ as′) <$> markTargets x lhs <*> markArgs as
 
 macro
   kong : R.Term → R.Term → R.TC ⊤
   kong proof hole = do
     rule     ← R.inferType proof
     goal     ← R.inferType hole
-    ruleLhs  ← leftHandSide rule
-    goalLhs  ← leftHandSide goal
-    ruleLhs′ ← R.normalise ruleLhs
-    goalLhs′ ← R.normalise goalLhs
-    marked   ← markTargets 1000 goalLhs′ ruleLhs′
-    lambda   ← return $ R.lam R.visible (R.abs "#" marked)
-    result   ← return $ R.def (quote cong) $ makeArg lambda ∷ makeArg proof ∷ []
+    ruleLhs₀ ← leftHandSide rule
+    goalLhs₀ ← leftHandSide goal
+    ruleLhs₁ ← R.normalise ruleLhs₀
+    goalLhs₁ ← R.normalise goalLhs₀
+    ruleLhs₂ ← stripIrrelevant ruleLhs₁
+    marked   ← markTargets goalLhs₁ ruleLhs₂
+    lambda   ← pure (R.lam R.visible (R.abs "#" marked))
+    result   ← pure (R.def (quote cong) (makeArg lambda ∷ makeArg proof ∷ []))
     R.unify hole result
     where
     makeArg : R.Term → R.Arg R.Term
-    makeArg = R.arg $ R.arg-info R.visible $ R.modality R.relevant R.quantity-ω
+    makeArg = R.arg (R.arg-info R.visible (R.modality R.relevant R.quantity-ω))
