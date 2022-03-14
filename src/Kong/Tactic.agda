@@ -50,8 +50,7 @@ private
     stripArgs : List (R.Arg R.Term) → R.TC (List (R.Arg R.Term))
     stripArgs []                    = pure []
     stripArgs (irrInstArg q x ∷ as) = stripArgs as
-    stripArgs (R.arg i x ∷ as)      =
-      (λ x′ as′ → R.arg i x′ ∷ as′) <$> stripIrrelevant x <*> stripArgs as
+    stripArgs (R.arg i x ∷ as)      = (_∷_ ∘ R.arg i) <$> stripIrrelevant x <*> stripArgs as
 
   markTargets : R.Term → R.Term → R.TC R.Term
   markTargets sub lhs = do
@@ -73,8 +72,7 @@ private
 
     markArgs : List (R.Arg R.Term) → R.TC (List (R.Arg R.Term))
     markArgs []               = pure []
-    markArgs (R.arg i x ∷ as) =
-      (λ x′ as′ → (R.arg i x′) ∷ as′) <$> markTargets x lhs <*> markArgs as
+    markArgs (R.arg i x ∷ as) = (_∷_ ∘ R.arg i) <$> markTargets x lhs <*> markArgs as
 
 macro
   kong : R.Term → R.Term → R.TC ⊤
