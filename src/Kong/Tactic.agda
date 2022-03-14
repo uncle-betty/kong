@@ -41,6 +41,7 @@ private
       (R.def f as)  → R.def f  <$> stripArgs as
       (R.meta x as) → R.meta x <$> stripArgs as
       (R.lit l)     → pure (R.lit l)
+      (R.unknown)   → pure (R.unknown)
       _             → invalid
     where
     invalid : R.TC R.Term
@@ -64,6 +65,7 @@ private
           (R.def f as)  → R.def f       <$> markArgs as
           (R.meta x as) → R.meta x      <$> markArgs as
           (R.lit l)     → pure (R.lit l)
+          (R.unknown)   → pure (R.unknown)
           _             → invalid
     where
     invalid : R.TC R.Term
