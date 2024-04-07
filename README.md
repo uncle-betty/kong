@@ -1,3 +1,6 @@
+*NOTE - I abandoned this repository and contributed to the standard library's
+cong! tactic instead.*
+
 **Kong**
 
 Kong provides one thing, `kong`, which is a version of `cong` that
